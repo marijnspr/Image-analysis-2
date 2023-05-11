@@ -15,10 +15,10 @@ def main():
     val_dir = "foto/validation"
     test_dir = "foto/test"
     modelpath = "C:/Users/Marijn/Documents/GitHub/Image-analysis-2/model.h5"
-    batch_size = 32
+    batch_size = 16
     img_height = 800
     img_width = 895
-    epochs = 3
+    epochs = 10
 
     # Call the modular functions
     check_gpu_availability()
@@ -35,7 +35,7 @@ def main():
     plot_training_history(history, epochs)
     calculate_roc_auc(model,test_ds)
     # Save the model
-    # save_model(model)
+    save_model(model)
     
 
 def check_gpu_availability():
@@ -56,11 +56,12 @@ def check_gpu_availability():
 
 
 def load_data(train_dir, val_dir, test_dir, batch_size, img_height, img_width):
+    
     train_ds = tf.keras.utils.image_dataset_from_directory(
         train_dir,
         validation_split=0.2,
         subset="training",
-        seed=123,
+        seed=420,
         image_size=(img_height, img_width),
         batch_size=batch_size,
         class_names=None
@@ -70,7 +71,7 @@ def load_data(train_dir, val_dir, test_dir, batch_size, img_height, img_width):
         val_dir,
         validation_split=0.2,
         subset="validation",
-        seed=123,
+        seed=420,
         image_size=(img_height, img_width),
         batch_size=batch_size
     )
@@ -97,9 +98,9 @@ def preprocess_data(train_ds, val_ds):
     normalization_layer = layers.Rescaling(1./255)
 
     normalized_train_ds = train_ds.map(lambda x, y: (normalization_layer(x), y))
-    normalized_val_ds = val_ds.map(lambda x, y: (normalization_layer(x), y))
+    # normalized_val_ds = val_ds.map(lambda x, y: (normalization_layer(x), y))
 
-    return normalized_train_ds, normalized_val_ds
+    return normalized_train_ds, val_ds
 
 
 def build_model(img_height, img_width, num_classes):
@@ -151,7 +152,9 @@ def plot_training_history(history, epochs):
     plt.plot(epochs_range, val_loss, label='Validation Loss')
     plt.legend(loc='upper right')
     plt.title('Training and Validation Loss')
+    plt.show()
     plt.show(block=False)
+
 
 def calculate_roc_auc(model, test_ds):
     # Calculate predicted probabilities
@@ -191,6 +194,7 @@ def calculate_roc_auc(model, test_ds):
     plt.ylabel('True Positive Rate')
     plt.title('Receiver Operating Characteristic (ROC) Curve')
     plt.legend(loc="lower right")
+    plt.show()
     plt.show(block=False)
 
     # Calculate the area under the ROC curve (AUC)
