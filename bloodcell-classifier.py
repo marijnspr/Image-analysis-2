@@ -1,5 +1,6 @@
 import os
 import numpy as np
+from scipy import optimize
 import tensorflow as tf
 from tensorflow import keras
 from PIL import Image
@@ -9,91 +10,121 @@ from sklearn.model_selection import train_test_split
 from keras.models import load_model
 from keras import layers
 from keras.models import Sequential
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+batch_size = 16
+img_height = 240
+img_width = 320
 
 def main():
     # Set the necessary variables
-    # dir = "C:/Users/marij/Documents/Image-analysis-foto/Dogs/"
-    dir = "C:/Users/marij/Documents/Image-analysis-foto/Fruit/"
-    
-    train_dir = dir + "train"
-    val_dir = dir + "validation"
-    test_dir = dir + "test"
-    
-    # train_dir = "foto/train"
-    # val_dir = "foto/validation"
-    # test_dir = "foto/test"
+    dir = "C:/Users/marij/Documents/Image-analysis-foto/Bloodcells/"
     modelpath = "C:/Users/Marijn/Documents/GitHub/Image-analysis-2/model.h5"
-    batch_size = 16
-    img_height = 100
-    img_width = 100
     epochs = 10
 
     # Call the modular functions
     # check_gpu_availability()
-    # train_ds, val_ds, test_ds, class_names, num_classes = load_data(train_dir, val_dir, test_dir, batch_size, img_height, img_width)
-    train_ds, val_ds, class_names, num_classes = create_validation(dir)
+    train_ds, val_ds, class_names, num_classes, test_ds = create_validation(dir+"TRAIN", dir+"TEST")
     normalized_train_ds, normalized_val_ds = preprocess_data(train_ds, val_ds)
-    
-    #building a new model
+
     model = build_model(img_height, img_width, num_classes)
 
-    # #load a trained model
-    # model = load_model(modelpath)
-
-    history = train_model(model, normalized_train_ds, normalized_val_ds, epochs)
+    history = train_model(model, normalized_train_ds, normalized_val_ds, epochs, num_classes)
     plot_training_history(history, epochs)
-    calculate_roc_auc(model,test_ds)
-    # Save the model
+    calculate_roc_auc(model, test_ds)
     save_model(model)
-    
+
+def check_gpu_availability():
+    # Check if GPU is available
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print("GPU is available.")
+        try:
+            # Select the first GPU device (if multiple are available)
+            tf.config.set_visible_devices(gpus[0], 'GPU')
+            # Limit GPU memory growth
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError as e:
+            print("Error occurred while configuring GPU:", e)
+    else:
+        print("GPU is not available.")
 
 
 def load_data(train_dir, val_dir, test_dir, batch_size, img_height, img_width):
-    
-    train_ds = tf.keras.utils.image_dataset_from_directory(
+    train_ds = tf.keras.preprocessing.image_dataset_from_directory(
         train_dir,
         validation_split=0.2,
         subset="training",
         seed=420,
         image_size=(img_height, img_width),
         batch_size=batch_size,
-        class_names=None
+        label_mode='categorical'
     )
-    tf.data.Dataset.from_tensor_slices(val_dir)
-    val_ds = tf.keras.utils.image_dataset_from_directory(
+
+    val_ds = tf.keras.preprocessing.image_dataset_from_directory(
         val_dir,
         validation_split=0.2,
         subset="validation",
         seed=420,
         image_size=(img_height, img_width),
-        batch_size=batch_size
+        batch_size=batch_size,
+        label_mode='categorical'
     )
 
-    test_ds = tf.keras.utils.image_dataset_from_directory(
+    test_ds = tf.keras.preprocessing.image_dataset_from_directory(
         test_dir,
         image_size=(img_height, img_width),
         batch_size=batch_size,
+        label_mode='categorical',
         shuffle=False
     )
 
     class_names = train_ds.class_names
     num_classes = len(class_names)
 
+    print("Number of classes:", num_classes)
+    print("Class names:", class_names)
+
+    train_ds = train_ds.prefetch(buffer_size=tf.data.AUTOTUNE)
+    val_ds = val_ds.prefetch(buffer_size=tf.data.AUTOTUNE)
+
     return train_ds, val_ds, test_ds, class_names, num_classes
+
 
 
 def preprocess_data(train_ds, val_ds):
     AUTOTUNE = tf.data.AUTOTUNE
 
-    train_ds = train_ds.cache().shuffle(1000).prefetch(buffer_size=AUTOTUNE)
-    val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
+    # Load and preprocess train dataset
+    normalized_train_ds = train_ds.map(
+        lambda x, y: (load_and_preprocess_image(x), y),
+        num_parallel_calls=AUTOTUNE
+    )
+    normalized_train_ds = normalized_train_ds.cache().shuffle(1000).prefetch(buffer_size=AUTOTUNE)
 
-    normalization_layer = layers.Rescaling(1./255)
-
-    normalized_train_ds = train_ds.map(lambda x, y: (tf.cast(normalization_layer(x), tf.float32), y))
-    normalized_val_ds = val_ds.map(lambda x, y: (tf.cast(normalization_layer(x), tf.float32), y))
+    # Load and preprocess validation dataset
+    normalized_val_ds = val_ds.map(
+        lambda x, y: (load_and_preprocess_image(x), y),
+        num_parallel_calls=AUTOTUNE
+    )
+    normalized_val_ds = normalized_val_ds.cache().prefetch(buffer_size=AUTOTUNE)
 
     return normalized_train_ds, normalized_val_ds
+
+
+def load_and_preprocess_image(image_path):
+    # Load image
+    image = tf.io.read_file(image_path)
+    # Decode and preprocess image
+    image = tf.image.decode_jpeg(image, channels=3)
+    image = tf.image.resize(image, [img_height, img_width])
+    image = image / 255.0  # Normalize image
+    image = tf.expand_dims(image, axis=0)  # Add batch dimension
+
+    return image
+ 
+
 
 
 def build_model(img_height, img_width, num_classes):
@@ -118,13 +149,65 @@ def build_model(img_height, img_width, num_classes):
     return model
 
 
-def train_model(model, train_ds, val_ds, epochs):
-    history = model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=epochs
-    )
+def train_model(model, train_ds, val_ds, epochs, num_classes):
+    # Define loss function
+    loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+
+    # Define metrics
+    train_acc_metric = tf.keras.metrics.CategoricalAccuracy()
+    val_acc_metric = tf.keras.metrics.CategoricalAccuracy()
+
+    @tf.function
+
+    @tf.function
+    def train_step(images, labels):
+        labels = tf.strings.to_number(labels, out_type=tf.int32)  # Convert labels to integer
+        labels = tf.one_hot(labels, num_classes)
+        with tf.GradientTape() as tape:
+            logits = model(images, training=True)
+            loss_value = loss_fn(labels, logits)
+        grads = tape.gradient(loss_value, model.trainable_weights)
+        optimizer.apply_gradients(zip(grads, model.trainable_weights))
+        train_acc_metric(labels, logits)
+        return loss_value
+
+
+
+
+
+    @tf.function
+    def test_step(images, labels):
+        val_logits = model(images, training=False)
+        val_acc_metric(labels, val_logits)
+
+    history = {"loss": [], "accuracy": [], "val_loss": [], "val_accuracy": []}
+    for epoch in range(epochs):
+        print("\nStart of epoch", epoch + 1)
+        for step, (x_batch_train, y_batch_train) in enumerate(train_ds):
+            loss_value = train_step(x_batch_train, y_batch_train)
+
+            if step % 10 == 0:
+                print("Training loss (for one batch) at step", step, ":", float(loss_value))
+
+        train_acc = train_acc_metric.result()
+        print("Training accuracy over epoch: %.4f" % (float(train_acc),))
+
+        for x_batch_val, y_batch_val in val_ds:
+            test_step(x_batch_val, y_batch_val)
+
+        val_acc = val_acc_metric.result()
+        print("Validation accuracy: %.4f" % (float(val_acc),))
+
+        history["loss"].append(float(loss_value))
+        history["accuracy"].append(float(train_acc))
+        history["val_loss"].append(float(loss_value))
+        history["val_accuracy"].append(float(val_acc))
+
+        train_acc_metric.reset_states()
+        val_acc_metric.reset_states()
+
     return history
+
 
 
 def plot_training_history(history, epochs):
@@ -209,10 +292,10 @@ def load_model(model_path):
     print("Model loaded successfully.")
     return load_model
 
-def create_validation(dataset_path):
+def create_validation(train_dir, test_dir):
     image_paths = []
     labels = []
-    for root, dirs, files in os.walk(dataset_path):
+    for root, dirs, files in os.walk(train_dir):
         for file in files:
             image_path = os.path.join(root, file)
             image_paths.append(image_path)
@@ -229,22 +312,16 @@ def create_validation(dataset_path):
     # Create TensorFlow datasets
     train_dataset = tf.data.Dataset.from_tensor_slices((train_image_paths, train_labels))
     val_dataset = tf.data.Dataset.from_tensor_slices((val_image_paths, val_labels))
-    return train_dataset, val_dataset, class_labels, num_classes
+    test_data_gen = ImageDataGenerator(rescale=1./255)
 
-def check_gpu_availability():
-    # Check if GPU is available
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        print("GPU is available.")
-        try:
-            # Select the first GPU device (if multiple are available)
-            tf.config.set_visible_devices(gpus[0], 'GPU')
-            # Limit GPU memory growth
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-        except RuntimeError as e:
-            print("Error occurred while configuring GPU:", e)
-    else:
-        print("GPU is not available.")
+    test_ds = test_data_gen.flow_from_directory(
+        test_dir,
+        target_size=(240, 320),
+        batch_size=batch_size,
+        class_mode='categorical',
+        shuffle=False
+    )
+    return train_dataset, val_dataset, class_labels, num_classes, test_ds
+
 
 main()
