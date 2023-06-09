@@ -90,7 +90,7 @@ history = model.fit(
     validation_steps=validation_generator.samples // batch_size
 )
 modelpath = "C:/Users/Marijn/Documents/GitHub/Image-analysis-2/model.h5"
-model.save(model_path)
+model.save(modelpath)
 print("Model saved successfully.")
 # Evaluate the model on the test set
 test_loss, test_accuracy = model.evaluate(test_generator)
